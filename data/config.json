@@ -1,0 +1,29 @@
+{
+  "profiles": [
+    {
+      "id": "pohadkovetipycz",
+      "pinterest_username": "@PohadkoveTipyCZ",
+      "board": "Pohádkové tipy pro děti",
+      "niche": "toys_fairytale",
+      "keywords": [
+        "pohádková hračka",
+        "dřevené hračky děti",
+        "puzzle pro děti",
+        "pohádkové kostýmy",
+        "dětský stan hradní",
+        "vzdělávací hračky",
+        "fairy tale toys",
+        "children puzzle",
+        "kids educational toy",
+        "princess dress up",
+        "castle playhouse kids"
+      ],
+      "affiliate": "aliexpress",
+      "tracking_id": "pohadkovetipycz",
+      "max_pins_daily": 5,
+      "active": true,
+      "post_time": "08:00",
+      "timezone": "Europe/Prague"
+    }
+  ]
+}

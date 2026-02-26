@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+.venv/
+
+# Data (logs a obrázky - velké soubory)
+memory/*.log
+data/pin-log.json
+
+# Media (binární obrázky)
+/home/server/media-data/
+
+# Secrets
+.env
+*.env
+
+# Runtime
+/tmp/
+*.tmp
