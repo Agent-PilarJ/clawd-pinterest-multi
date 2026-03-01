@@ -3,6 +3,7 @@
 Pinterest Poster — postuje piny přes Playwright s Chrome profilem.
 Využívá uloženou session pro Janu Horákovou (@PohadkoveTipyCZ).
 Selektory ověřeny 2026-02-24 (viz PINTEREST_NOTES.md).
+Fix 2026-03-01: přidána selekce board + wait pro Publish button.
 """
 
 import asyncio
@@ -20,11 +21,10 @@ CHROME_PROFILE_TMP = "/tmp/pinterest-poster-profile"
 
 # Pinterest URL
 PIN_BUILDER_URL = "https://www.pinterest.com/pin-creation-tool/"
+TARGET_BOARD = "Pohádkové tipy pro děti"
 
 
 def _get_xauthority() -> str:
-    """Najde správný XAUTHORITY soubor."""
-    # Zkus run/user/1000
     xauth_dir = "/run/user/1000"
     if os.path.exists(xauth_dir):
         for fname in os.listdir(xauth_dir):
@@ -36,14 +36,17 @@ def _get_xauthority() -> str:
 
 
 def _prepare_profile() -> str:
-    """Zkopíruje Chrome profil do /tmp a odstraní SingletonLock."""
     if os.path.exists(CHROME_PROFILE_TMP):
         shutil.rmtree(CHROME_PROFILE_TMP)
-    shutil.copytree(CHROME_PROFILE_SRC, CHROME_PROFILE_TMP)
+    shutil.copytree(CHROME_PROFILE_SRC, CHROME_PROFILE_TMP, ignore_dangling_symlinks=True,
+                    ignore=shutil.ignore_patterns("SingletonSocket", "SingletonCookie", "SingletonLock"))
     for lock_file in ["SingletonLock", "SingletonCookie", "SingletonSocket"]:
         path = os.path.join(CHROME_PROFILE_TMP, lock_file)
-        if os.path.exists(path):
-            os.remove(path)
+        try:
+            if os.path.lexists(path):
+                os.remove(path)
+        except OSError:
+            pass
     logger.info(f"Chrome profil připraven: {CHROME_PROFILE_TMP}")
     return CHROME_PROFILE_TMP
 
@@ -52,32 +55,17 @@ async def post_pin_async(
     image_path: str,
     title: str,
     link: str,
-    board: str = "Pohádkové tipy pro děti",
+    board: str = TARGET_BOARD,
     dry_run: bool = False,
 ) -> bool:
-    """
-    Postne pin na Pinterest.
-
-    Args:
-        image_path: Cesta k obrázku (JPEG/PNG)
-        title: Titulek pinu (max ~100 znaků)
-        link: Affiliate nebo produktová URL
-        board: Název board (nepovinné, AliExpress piny bez board fungují)
-        dry_run: Pokud True, simuluje bez skutečného postování
-
-    Returns:
-        True pokud pin byl zveřejněn
-    """
     if dry_run:
         logger.info(f"[DRY-RUN] post_pin: '{title[:50]}' → {link[:60]}")
-        logger.info(f"[DRY-RUN]   obrázek: {image_path}")
-        logger.info(f"[DRY-RUN]   board: {board}")
         return True
 
     try:
         from playwright.async_api import async_playwright
     except ImportError:
-        logger.error("Playwright není nainstalován. Spusť: pip install playwright && playwright install chromium")
+        logger.error("Playwright není nainstalován.")
         return False
 
     profile_path = _prepare_profile()
@@ -111,9 +99,8 @@ async def post_pin_async(
             if not file_input:
                 logger.error("Nenalezen file input na stránce")
                 return False
-
             await file_input.set_input_files(image_path)
-            await page.wait_for_timeout(4000)  # Čekej na upload
+            await page.wait_for_timeout(4000)
 
             # Vyplň titulek
             logger.info(f"Vyplňuji titulek: {title[:50]}")
@@ -125,19 +112,58 @@ async def post_pin_async(
                 logger.warning("Titulek input nenalezen")
 
             # Vyplň link
-            logger.info(f"Vyplňuji link: {link[:60]}")
+            logger.info(f"Vyplňuji link: {link[:80]}")
             link_inp = await page.query_selector("input[placeholder='Add a link']")
             if link_inp:
                 await link_inp.click()
                 await link_inp.fill(link)
-                await page.keyboard.press("Tab")  # trigger validace
-                await page.wait_for_timeout(1000)
+                await page.keyboard.press("Tab")
+                await page.wait_for_timeout(1500)
             else:
                 logger.warning("Link input nenalezen")
 
-            # Publish
-            logger.info("Klikám Publish...")
+            # Vyber board (klíčové pro aktivaci Publish button!)
+            logger.info(f"Vybírám board: {board}")
+            try:
+                board_selector = await page.query_selector("[data-test-id='board-dropdown-select-button']")
+                if not board_selector:
+                    # Zkus alternativní selektor
+                    board_selector = await page.query_selector("button[aria-label*='board'], button[aria-label*='Board']")
+                if board_selector:
+                    await board_selector.click()
+                    await page.wait_for_timeout(1000)
+                    # Hledej board v dropdown
+                    board_opt = await page.query_selector(f"[data-test-id*='board-row'] >> text={board}")
+                    if not board_opt:
+                        board_opt = await page.get_by_text(board, exact=True).first.element_handle()
+                    if board_opt:
+                        await board_opt.click()
+                        await page.wait_for_timeout(1000)
+                        logger.info(f"Board '{board}' vybrán")
+                    else:
+                        logger.warning(f"Board '{board}' nenalezen v dropdown")
+                else:
+                    logger.warning("Board selector nenalezen — zkouším pokračovat bez něj")
+            except Exception as e:
+                logger.warning(f"Chyba při výběru board: {e} — pokračuji")
+
+            # Počkej až bude Publish button enabled (max 10s)
+            logger.info("Čekám na aktivaci Publish button...")
             pub = page.get_by_role("button", name="Publish")
+            try:
+                await pub.wait_for(state="visible", timeout=5000)
+                # Zkus počkat až nebude disabled
+                for _ in range(10):
+                    is_disabled = await pub.get_attribute("disabled")
+                    aria_disabled = await pub.get_attribute("aria-disabled")
+                    if is_disabled is None and aria_disabled != "true":
+                        break
+                    await page.wait_for_timeout(1000)
+                    logger.debug("Publish button stále disabled, čekám...")
+            except Exception:
+                pass
+
+            logger.info("Klikám Publish...")
             await pub.click()
             await page.wait_for_timeout(5000)
 
@@ -155,35 +181,25 @@ def post_pin(
     image_path: str,
     title: str,
     link: str,
-    board: str = "Pohádkové tipy pro děti",
+    board: str = TARGET_BOARD,
     dry_run: bool = False,
 ) -> bool:
-    """Synchronní wrapper pro post_pin_async."""
     return asyncio.run(post_pin_async(image_path, title, link, board, dry_run))
 
 
 if __name__ == "__main__":
     import sys
     logging.basicConfig(level=logging.INFO)
-
     dry = "--dry-run" in sys.argv
-
-    # Test
     test_image = "/home/server/media-data/pinterest/test.jpg"
-    # Vytvoř testovací placeholder pokud neexistuje
     if not os.path.exists(test_image):
         os.makedirs(os.path.dirname(test_image), exist_ok=True)
-        # Stáhni placeholder obrázek
         import urllib.request
         try:
-            urllib.request.urlretrieve(
-                "https://via.placeholder.com/1000x1500.jpg",
-                test_image
-            )
+            urllib.request.urlretrieve("https://via.placeholder.com/1000x1500.jpg", test_image)
         except Exception:
             with open(test_image, "wb") as f:
                 f.write(b"")
-
     result = post_pin(
         image_path=test_image,
         title="Test Pin — Pohádkové hračky pro děti",

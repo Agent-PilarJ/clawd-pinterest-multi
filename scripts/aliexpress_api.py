@@ -32,16 +32,29 @@ PRODUCT_BLACKLIST_KEYWORDS = [
     # Auto
     "car sticker", "car accessories", "steering wheel", "rearview mirror",
     "tire valve", "valve cap", "wheel cap", "car wheel",
-    # Módní doplňky pro dospělé
-    "leather bag", "bag organizer", "handbag", "purse", "wallet",
-    "women bag", "women's bag", "shoulder bag", "braided", "faux leather",
-    "loewe", "tote bag", "crossbody", "clutch bag", "messenger bag",
-    "retro bag", "organizer insert",
-    # Oblečení pro dospělé
-    "women's fashion", "men's fashion", "adult dress", "lingerie",
-    # Ostatní nerelevantní
+    # Módní doplňky pro dospělé (jen jednoznačně nepatřičné)
+    "bag organizer", "handbag", "purse", "wallet",
+    "women bag", "women\'s bag", "loewe",
+    "organizer insert", "luggage tag",
+    # Dámská móda pro dospělé
+    "lingerie", "bra ", "underwear",
+    # Jiné nerelevantní
     "nail art", "false nail", "wig", "hair extension", "eyelash",
     "sex toy", "adult toy",
+    # Obsahuje "bag" + "women" nebo "lady" v titulku → filtruj v kódu
+]
+
+# Kombinace slov pro filtraci (oba výrazy musí být v titulku)
+PRODUCT_BLACKLIST_COMBOS = [
+    ("shoulder bag", "women"),
+    ("shoulder bag", "lady"),
+    ("leather bag", "women"),
+    ("leather bag", "lady"),
+    ("faux leather", "bag"),
+    ("braided", "bag"),
+    ("tote", "women"),
+    ("crossbody", "women"),
+    ("clutch", "women"),
 ]
 
 # Minimální skóre relevance (podíl slov z dotazu v názvu produktu)
@@ -82,10 +95,16 @@ def _is_relevant_product(product: Dict[str, Any], keyword: str) -> bool:
     """
     title = (product.get("product_title") or "").lower()
 
-    # Blacklist check
+    # Blacklist check — jednoduchá klíčová slova
     for bad_kw in PRODUCT_BLACKLIST_KEYWORDS:
         if bad_kw.lower() in title:
             logger.debug(f"Filtrováno (blacklist '{bad_kw}'): {title[:60]}")
+            return False
+
+    # Blacklist combos — oba výrazy musí být v titulku
+    for (kw1, kw2) in PRODUCT_BLACKLIST_COMBOS:
+        if kw1.lower() in title and kw2.lower() in title:
+            logger.debug(f"Filtrováno (combo '{kw1}'+'{kw2}'): {title[:60]}")
             return False
 
     return True
