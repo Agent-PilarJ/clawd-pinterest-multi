@@ -82,7 +82,7 @@ async def post_pin_async(
 
             logger.info(f"Naviguju na {PIN_BUILDER_URL}")
             await page.goto(PIN_BUILDER_URL)
-            await page.wait_for_load_state("networkidle", timeout=10000)
+            # networkidle zbytečné pro Pinterest
             await page.wait_for_timeout(2000)
 
             # Upload obrázku
@@ -91,10 +91,17 @@ async def post_pin_async(
             await file_input.set_input_files(image_path)
             await page.wait_for_timeout(4000)
 
-            # Titulek
+            # Titulek — čekej až bude input enabled (obrázek zpracován)
             logger.info(f"Vyplňuji titulek: {title[:50]}")
             title_loc = page.locator("input[placeholder='Add a title']").first
-            await title_loc.wait_for(state="visible", timeout=10000)
+            await title_loc.wait_for(state="visible", timeout=15000)
+            # Čekej až nebude disabled (Pinterest ho aktivuje po zpracování obrázku)
+            for i in range(20):
+                disabled = await title_loc.get_attribute("disabled")
+                if disabled is None:
+                    break
+                logger.debug(f"Title input disabled, čekám ({i+1}/20)...")
+                await page.wait_for_timeout(500)
             await title_loc.click()
             await title_loc.fill(title[:100])
             await page.wait_for_timeout(500)
