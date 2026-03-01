@@ -26,10 +26,22 @@ ALLOWED_CATEGORY_IDS = [
 
 # Klíčová slova pro filtraci nerelevantních produktů (blacklist)
 PRODUCT_BLACKLIST_KEYWORDS = [
-    "phone case", "car sticker", "leather bag", "bag organizer",
-    "women bag", "handbag", "purse", "wallet", "phone holder",
-    "car accessories", "steering wheel", "iphone", "samsung",
-    "laptop", "keyboard", "mouse pad", "usb hub",
+    # Tech / phone
+    "phone case", "iphone", "samsung", "phone holder", "screen protector",
+    "usb hub", "laptop", "keyboard", "mouse pad", "earphone", "headphone",
+    # Auto
+    "car sticker", "car accessories", "steering wheel", "rearview mirror",
+    "tire valve", "valve cap", "wheel cap", "car wheel",
+    # Módní doplňky pro dospělé
+    "leather bag", "bag organizer", "handbag", "purse", "wallet",
+    "women bag", "women's bag", "shoulder bag", "braided", "faux leather",
+    "loewe", "tote bag", "crossbody", "clutch bag", "messenger bag",
+    "retro bag", "organizer insert",
+    # Oblečení pro dospělé
+    "women's fashion", "men's fashion", "adult dress", "lingerie",
+    # Ostatní nerelevantní
+    "nail art", "false nail", "wig", "hair extension", "eyelash",
+    "sex toy", "adult toy",
 ]
 
 # Minimální skóre relevance (podíl slov z dotazu v názvu produktu)
@@ -263,7 +275,7 @@ if __name__ == "__main__":
     keyword = next((a for a in sys.argv[1:] if not a.startswith("-")), "puzzle pro děti")
 
     print(f"\n=== Test: search_products('{keyword}') s category_ids=6,1511 ===")
-    products = search_products(keyword, page_size=10, category_ids="6,1511", dry_run=dry)
+    products = search_products(keyword, page_size=10, category_ids="6,1511,100003070", dry_run=dry)
     for p in products:
         print(f"  [{p.get('product_id')}] {p.get('product_title', '')[:60]}")
         print(f"    Cena: {p.get('target_sale_price')} | URL: {p.get('product_detail_url', '')[:70]}")
