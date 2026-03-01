@@ -82,6 +82,9 @@ def post_pin(
         logger.info(f"[DRY-RUN] post_pin: '{title[:50]}' → {link[:60]}")
         return True
 
+    # Ensure Pinterest session first
+    ensure_pinterest_session()
+
     # Naviguj na pin creation
     logger.info(f"Naviguju na {PIN_BUILDER_URL}")
     _mcporter("navigate_page", {"type": "url", "url": PIN_BUILDER_URL})
@@ -202,3 +205,94 @@ if __name__ == "__main__":
         dry_run=dry,
     )
     print(f"Výsledek: {'✅ OK' if result else '❌ FAIL'}")
+
+
+def ensure_pinterest_session() -> bool:
+    """
+    Ensure we are logged into Pinterest.
+    Checks for 'Pohádkové Tipy CZ' in page or profile icon.
+    If not logged in, fills credentials from .env and submits.
+    """
+    import os
+    from pathlib import Path
+
+    def load_env():
+        env_path = Path.home() / ".clawdbot" / ".env"
+        if env_path.exists():
+            with open(env_path) as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, _, v = line.partition("=")
+                        os.environ.setdefault(k.strip(), v.strip())
+
+    load_env()
+
+    logger.info("🔐 Ensuring Pinterest session...")
+
+    _mcporter("navigate_page", {"type": "url", "url": "https://www.pinterest.com"})
+    time.sleep(3)
+    snap = _snapshot()
+
+    # Check if logged in: look for profile/avatar or our account name
+    logged_in = (
+        "Pohádkové Tipy CZ" in snap or
+        "pohadkovetipycz" in snap.lower() or
+        "log in" not in snap.lower()
+    )
+
+    if logged_in:
+        logger.info("✅ Pinterest already logged in")
+        return True
+
+    logger.info("🔑 Pinterest not logged in — attempting login...")
+
+    email = os.environ.get("PINTEREST_EMAIL", "").strip()
+    password = os.environ.get("PINTEREST_PASSWORD", "").strip()
+
+    if not email or not password:
+        logger.error("❌ PINTEREST_EMAIL / PINTEREST_PASSWORD not set in ~/.clawdbot/.env")
+        return False
+
+    _mcporter("navigate_page", {"type": "url", "url": "https://www.pinterest.com/login/"})
+    time.sleep(3)
+    snap = _snapshot()
+
+    # Fill email
+    email_uid = _find_uid(snap, "email")
+    if not email_uid:
+        for line in snap.splitlines():
+            if "textbox" in line.lower() and ("email" in line.lower() or "id" in line.lower()):
+                m = re.search(r'uid=(\S+)', line)
+                if m:
+                    email_uid = m.group(1)
+                    break
+    if email_uid:
+        _mcporter("fill", {"uid": email_uid, "value": email})
+        time.sleep(0.5)
+    else:
+        logger.warning("Email field not found")
+
+    # Fill password
+    pw_uid = _find_uid(snap, "password")
+    if pw_uid:
+        _mcporter("fill", {"uid": pw_uid, "value": password})
+        time.sleep(0.5)
+
+    # Submit
+    snap2 = _snapshot()
+    login_uid = _find_uid(snap2, "Log in")
+    if not login_uid:
+        login_uid = _find_uid(snap2, "button")
+    if login_uid:
+        _mcporter("click", {"uid": login_uid})
+        time.sleep(4)
+
+    # Verify
+    snap3 = _snapshot()
+    if "Pohádkové Tipy CZ" in snap3 or "pohadkovetipycz" in snap3.lower():
+        logger.info("✅ Pinterest login successful")
+        return True
+
+    logger.warning("⚠️  Pinterest login may have failed — check manually")
+    return False
