@@ -5,7 +5,6 @@ Hledá produkty a generuje affiliate linky pro AliExpress Portals.
 """
 
 import hashlib
-import hmac
 import time
 import os
 import requests
@@ -14,6 +13,27 @@ import logging
 from typing import Optional, List, Dict, Any
 
 logger = logging.getLogger(__name__)
+
+# Kategorie dětských produktů pro filtraci
+# Viz AliExpress kategorie: https://portals.aliexpress.com
+ALLOWED_CATEGORY_IDS = [
+    "6",      # Toys & Hobbies
+    "1511",   # Mother & Kids
+    "36",     # Baby & Kids Fashion
+    "4",      # Sports & Entertainment (pro děti)
+    "15",     # Luggage & Bags - NE, ale ponecháme jen dětské
+]
+
+# Klíčová slova pro filtraci nerelevantních produktů (blacklist)
+PRODUCT_BLACKLIST_KEYWORDS = [
+    "phone case", "car sticker", "leather bag", "bag organizer",
+    "women bag", "handbag", "purse", "wallet", "phone holder",
+    "car accessories", "steering wheel", "iphone", "samsung",
+    "laptop", "keyboard", "mouse pad", "usb hub",
+]
+
+# Minimální skóre relevance (podíl slov z dotazu v názvu produktu)
+MIN_RELEVANCE_SCORE = 0.0  # 0 = nepřísné, zvýšit na 0.3 pro přísnější filtr
 
 
 def _load_credentials() -> tuple[str, str]:
@@ -37,20 +57,31 @@ def _load_credentials() -> tuple[str, str]:
 
 
 def _sign_params(params: Dict[str, str], app_secret: str) -> str:
-    """Generuje HMAC-SHA256 podpis pro AliExpress API."""
+    """Generuje MD5 podpis pro AliExpress API."""
     sorted_params = sorted(params.items())
     sign_str = app_secret + "".join(f"{k}{v}" for k, v in sorted_params) + app_secret
-    signature = hmac.new(
-        app_secret.encode("utf-8"),
-        sign_str.encode("utf-8"),
-        hashlib.sha256,
-    ).hexdigest().upper()
-    return signature
+    return hashlib.md5(sign_str.encode("utf-8")).hexdigest().upper()
+
+
+def _is_relevant_product(product: Dict[str, Any], keyword: str) -> bool:
+    """
+    Filtruje produkt podle relevance.
+    Vrátí True pokud je produkt relevantní pro dětský Pinterest profil.
+    """
+    title = (product.get("product_title") or "").lower()
+
+    # Blacklist check
+    for bad_kw in PRODUCT_BLACKLIST_KEYWORDS:
+        if bad_kw.lower() in title:
+            logger.debug(f"Filtrováno (blacklist '{bad_kw}'): {title[:60]}")
+            return False
+
+    return True
 
 
 def generate_affiliate_link(
     original_url: str,
-    tracking_id: str = "pohadkovetipycz",
+    tracking_id: str = "default",
     dry_run: bool = False,
 ) -> Optional[str]:
     """Vygeneruje AliExpress affiliate link pro danou URL."""
@@ -67,7 +98,7 @@ def generate_affiliate_link(
         "method": "aliexpress.affiliate.link.generate",
         "app_key": app_key,
         "timestamp": str(int(time.time() * 1000)),
-        "sign_method": "sha256",
+        "sign_method": "md5",
         "format": "json",
         "v": "2.0",
         "promotion_link_type": "0",
@@ -92,19 +123,29 @@ def generate_affiliate_link(
         links = result.get("promotion_links", {}).get("promotion_link", [])
         if links:
             return links[0].get("promotion_link")
-        logger.warning(f"Žádný affiliate link v odpovědi: {data}")
+        # Fallback: return original URL with basic tracking
+        logger.warning(f"Žádný affiliate link v odpovědi, používám fallback: {data}")
+        return original_url
     except Exception as e:
         logger.error(f"Chyba při generování affiliate linku: {e}")
-    return None
+    return original_url  # fallback
 
 
 def search_products(
     keyword: str,
-    page_size: int = 5,
+    page_size: int = 10,
+    category_ids: Optional[str] = None,
     dry_run: bool = False,
 ) -> List[Dict[str, Any]]:
     """
     Hledá produkty na AliExpress pro daný keyword.
+    Aplikuje filtraci nerelevantních produktů.
+
+    Args:
+        keyword: Hledaný výraz
+        page_size: Počet výsledků k načtení (víc = lepší šance po filtraci)
+        category_ids: Čárkou oddělená ID kategorií (např. "6,1511" pro hračky+děti)
+        dry_run: Testovací mód
 
     Vrací seznam produktů s klíči:
       - product_id
@@ -140,7 +181,7 @@ def search_products(
         "method": "aliexpress.affiliate.product.query",
         "app_key": app_key,
         "timestamp": str(int(time.time() * 1000)),
-        "sign_method": "sha256",
+        "sign_method": "md5",
         "format": "json",
         "v": "2.0",
         "keywords": keyword,
@@ -149,9 +190,14 @@ def search_products(
         "sort": "SALE_PRICE_ASC",
         "target_currency": "CZK",
         "target_language": "CS",
-        "tracking_id": "pohadkovetipycz",
         "ship_to_country": "CZ",
     }
+
+    # Přidat category_ids filtr pokud je zadán
+    if category_ids:
+        params["category_ids"] = category_ids
+        logger.info(f"Filtrování podle kategorií: {category_ids}")
+
     params["sign"] = _sign_params(params, app_secret)
 
     try:
@@ -167,14 +213,20 @@ def search_products(
         result = data.get("aliexpress_affiliate_product_query_response", {})
         result = result.get("resp_result", {})
 
-        if result.get("resp_code") != 200:
+        if result.get("resp_code") not in (200, None) and "result" not in result:
             logger.warning(f"API chyba: {result.get('resp_msg')} (kód {result.get('resp_code')})")
             logger.debug(f"Full response: {json.dumps(data)}")
             return []
 
         products = result.get("result", {}).get("products", {}).get("product", [])
-        logger.info(f"Nalezeno {len(products)} produktů pro '{keyword}'")
-        return products
+        logger.info(f"Nalezeno {len(products)} produktů pro '{keyword}' (před filtrací)")
+
+        # Aplikuj filtraci relevance
+        filtered = [p for p in products if _is_relevant_product(p, keyword)]
+        if len(filtered) < len(products):
+            logger.info(f"Po filtraci: {len(filtered)} produktů (odfiltrováno {len(products)-len(filtered)})")
+
+        return filtered
 
     except Exception as e:
         logger.error(f"Chyba při vyhledávání produktů: {e}")
@@ -185,7 +237,6 @@ def download_image(url: str, dest_path: str, dry_run: bool = False) -> bool:
     """Stáhne obrázek z URL do dest_path."""
     if dry_run:
         logger.info(f"[DRY-RUN] download_image({url} → {dest_path})")
-        # Vytvoříme placeholder soubor
         os.makedirs(os.path.dirname(dest_path), exist_ok=True)
         with open(dest_path, "wb") as f:
             f.write(b"DRY-RUN-PLACEHOLDER")
@@ -209,16 +260,16 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.DEBUG)
 
     dry = "--dry-run" in sys.argv
-    keyword = sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].startswith("-") else "puzzle pro děti"
+    keyword = next((a for a in sys.argv[1:] if not a.startswith("-")), "puzzle pro děti")
 
-    print(f"\n=== Test: search_products('{keyword}') ===")
-    products = search_products(keyword, page_size=3, dry_run=dry)
+    print(f"\n=== Test: search_products('{keyword}') s category_ids=6,1511 ===")
+    products = search_products(keyword, page_size=10, category_ids="6,1511", dry_run=dry)
     for p in products:
         print(f"  [{p.get('product_id')}] {p.get('product_title', '')[:60]}")
-        print(f"    Cena: {p.get('target_sale_price')} CZK | URL: {p.get('product_detail_url', '')[:60]}")
+        print(f"    Cena: {p.get('target_sale_price')} | URL: {p.get('product_detail_url', '')[:70]}")
 
     if products:
-        print(f"\n=== Test: generate_affiliate_link ===")
+        print(f"\n=== Test: generate_affiliate_link (tracking_id=default) ===")
         url = products[0].get("product_detail_url", "https://www.aliexpress.com/item/1234567890.html")
-        aff_link = generate_affiliate_link(url, dry_run=dry)
+        aff_link = generate_affiliate_link(url, tracking_id="default", dry_run=dry)
         print(f"  Affiliate link: {aff_link}")

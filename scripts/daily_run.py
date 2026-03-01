@@ -195,7 +195,7 @@ def run_for_profile(
             break
 
         logger.info(f"\n🔍 Hledám: '{keyword}'")
-        products = search_products(keyword, page_size=5, dry_run=dry_run)
+        products = search_products(keyword, page_size=10, category_ids="6,1511", dry_run=dry_run)
 
         if not products:
             logger.warning(f"  Žádné produkty pro '{keyword}'")
