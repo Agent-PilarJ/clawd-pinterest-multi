@@ -61,11 +61,12 @@ PRODUCT_BLACKLIST_COMBOS = [
 MIN_RELEVANCE_SCORE = 0.0  # 0 = nepřísné, zvýšit na 0.3 pro přísnější filtr
 
 
-def _load_credentials() -> tuple[str, str]:
+def _load_credentials() -> tuple[str, str, str]:
     """Načte credentials z .env souboru."""
     env_path = os.path.expanduser("~/.clawdbot/.env")
     app_key = ""
     app_secret = ""
+    tracking_id = "default"
     try:
         with open(env_path) as f:
             for line in f:
@@ -74,11 +75,14 @@ def _load_credentials() -> tuple[str, str]:
                     app_key = line.split("=", 1)[1]
                 elif line.startswith("ALIEXPRESS_APP_SECRET="):
                     app_secret = line.split("=", 1)[1]
+                elif line.startswith("ALIEXPRESS_TRACKING_ID="):
+                    tracking_id = line.split("=", 1)[1]
     except FileNotFoundError:
         pass
     app_key = os.environ.get("ALIEXPRESS_APP_KEY", app_key)
     app_secret = os.environ.get("ALIEXPRESS_APP_SECRET", app_secret)
-    return app_key, app_secret
+    tracking_id = os.environ.get("ALIEXPRESS_TRACKING_ID", tracking_id)
+    return app_key, app_secret, tracking_id
 
 
 def _sign_params(params: Dict[str, str], app_secret: str) -> str:
@@ -120,10 +124,13 @@ def generate_affiliate_link(
         logger.info(f"[DRY-RUN] generate_affiliate_link({original_url})")
         return f"https://s.click.aliexpress.com/dry-run-link?url={original_url}"
 
-    app_key, app_secret = _load_credentials()
+    app_key, app_secret, env_tracking_id = _load_credentials()
     if not app_key or not app_secret:
         logger.error("Chybí ALIEXPRESS_APP_KEY nebo ALIEXPRESS_APP_SECRET")
         return None
+    # Použij tracking_id z env pokud není explicitně zadán jiný
+    if tracking_id == "default":
+        tracking_id = env_tracking_id
 
     params = {
         "method": "aliexpress.affiliate.link.generate",
@@ -203,7 +210,7 @@ def search_products(
             for i in range(min(page_size, 3))
         ]
 
-    app_key, app_secret = _load_credentials()
+    app_key, app_secret, _ = _load_credentials()
     if not app_key or not app_secret:
         logger.error("Chybí ALIEXPRESS_APP_KEY nebo ALIEXPRESS_APP_SECRET")
         return []
